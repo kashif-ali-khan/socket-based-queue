@@ -45,14 +45,26 @@ io.on('connection', (socket) => {
 // UPDATE TIMES TO CUSTOMERS AND AGENTS EVERY SECOND
 setInterval(() => {
   const now = Date.now();
-  queue.forEach((cust, index) => {
+  // Build a set of all languages supported by at least one agent
+  const supportedLanguages = new Set();
+  for (const agent of agents.values()) {
+    for (const lang of agent.languages) {
+      supportedLanguages.add(lang);
+    }
+  }
+  // Build the merged queue for all supported languages, sorted by join time
+  const mergedQueue = queue
+    .filter(cust => supportedLanguages.has(cust.language))
+    .sort((a, b) => a.joinedAt - b.joinedAt);
+  // For each customer, calculate their position and estWait in the merged queue
+  queue.forEach((cust) => {
+    const index = mergedQueue.findIndex(c => c.socketId === cust.socketId);
     const elapsedSec = Math.floor((now - cust.joinedAt) / 1000);
-    const avgWait = 90 * index; // 90s per customer ahead
+    const avgWait = 90 * index; // 90s per customer ahead in the merged queue
     const estWait = Math.max(0, avgWait - elapsedSec);
-
     io.to(cust.socketId).emit('queue-update', {
-      position: index + 1,
-      estWait
+      position: index >= 0 ? index + 1 : undefined,
+      estWait: index >= 0 ? estWait : undefined
     });
   });
   sendQueueToAgents();
@@ -63,27 +75,18 @@ function sendQueueToAgent(socketId) {
   if (!agent) return;
   const { languages } = agent;
   const now = Date.now();
-  // Filter the queue for this agent's languages
-  const filteredQueue = queue.filter(cust => !languages.length || languages.includes(cust.language));
-  // For each language, calculate position and estWait in its own language queue
-  let languageQueues = {};
-  for (const lang of languages) {
-    languageQueues[lang] = filteredQueue.filter(cust => cust.language === lang);
-  }
-  // Flatten the language-specific queues, preserving order
-  let formatted = [];
-  for (const lang of languages) {
-    const langQueue = languageQueues[lang];
-    langQueue.forEach((cust, index) => {
-      formatted.push({
-        name: cust.name,
-        customerId: cust.customerId,
-        language: cust.language,
-        position: index + 1,
-        estWait: Math.max(0, 90 * index - Math.floor((now - cust.joinedAt) / 1000))
-      });
-    });
-  }
+  // Filter the queue for this agent's languages and sort by join time
+  const filteredQueue = queue
+    .filter(cust => !languages.length || languages.includes(cust.language))
+    .sort((a, b) => a.joinedAt - b.joinedAt);
+  // Assign position and estWait in the merged queue
+  const formatted = filteredQueue.map((cust, index) => ({
+    name: cust.name,
+    customerId: cust.customerId,
+    language: cust.language,
+    position: index + 1,
+    estWait: Math.max(0, 90 * index - Math.floor((now - cust.joinedAt) / 1000))
+  }));
   console.log(`[DASHBOARD] Sending queue to agent ${socketId}:`, formatted);
   console.log(`[DASHBOARD] Agent object:`, agent);
   io.to(socketId).emit('dashboard-update', formatted);

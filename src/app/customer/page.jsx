@@ -72,8 +72,10 @@ export default function Customer() {
         </div>
       ) : (
         <div className="text-center space-y-2">
-          <p className="text-lg font-medium"><strong>Position:</strong> {status.position}</p>
-          <p className="text-lg font-medium"><strong>Estimated Wait:</strong> {Math.floor(status.estWait / 60)}m {status.estWait % 60}s</p>
+          <p className="text-lg font-medium"><strong>Name:</strong> {name}</p>
+          <p className="text-lg font-medium"><strong>Language:</strong> {LANGUAGES.find(l => l.value === language)?.label}</p>
+          <p className="text-lg font-medium"><strong>Position:</strong> {typeof status.position === 'number' && status.position > 0 ? status.position : 'Calculating...'}</p>
+          <p className="text-lg font-medium"><strong>Estimated Wait:</strong> {typeof status.estWait === 'number' && !isNaN(status.estWait) ? `${Math.floor(status.estWait / 60)}m ${status.estWait % 60}s` : 'Calculating...'}</p>
         </div>
       )}
     </div>
