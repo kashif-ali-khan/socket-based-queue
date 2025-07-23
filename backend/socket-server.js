@@ -13,12 +13,14 @@ const io = new Server(server, {
 
 let queue = []; // [{ socketId, name, joinedAt, customerId }]
 let agents = new Map(); // Map of socketId -> { languages: [] }
+let activeCalls = new Map(); // agentSocketId -> customerId
 
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
   // CUSTOMER JOINS QUEUE
   socket.on('join-queue', ({ name, customerId, language }) => {
+    socket.customerId = customerId; // Set customerId on the socket for later reference
     const joinedAt = Date.now();
     queue.push({ socketId: socket.id, name, joinedAt, customerId, language });
     console.log(`[QUEUE] Customer joined: ${name} (${customerId}), language: ${language}, socket: ${socket.id}`);
@@ -31,6 +33,65 @@ io.on('connection', (socket) => {
     console.log(`[AGENT] Agent ${socket.id} selected languages: ${languages.join(', ')}`);
     console.log(`[AGENT] Agent object:`, agents.get(socket.id));
     sendQueueToAgent(socket.id);
+  });
+
+  socket.on('connect-customer', ({ customerId }) => {
+    // Find the customer in the queue
+    const customer = queue.find(c => c.customerId === customerId);
+    if (!customer) return;
+    // Remove the customer from the queue
+    queue = queue.filter(c => c.customerId !== customerId);
+    // Mark this call as active
+    activeCalls.set(socket.id, customerId);
+    // Notify agent
+    socket.emit('call-connected', { customerId });
+    // Notify customer
+    io.to(customer.socketId).emit('call-connected', { agentId: socket.id });
+    sendQueueToAgents();
+  });
+
+  socket.on('end-call', ({ customerId }) => {
+    // Remove the call from activeCalls
+    for (const [agentId, custId] of activeCalls.entries()) {
+      if (custId === customerId) {
+        activeCalls.delete(agentId);
+        // Notify agent
+        io.to(agentId).emit('call-ended', { customerId });
+      }
+    }
+    // Notify customer
+    const customer = queue.find(c => c.customerId === customerId);
+    if (customer) {
+      io.to(customer.socketId).emit('call-ended');
+    } else {
+      // If customer was already removed from queue, try to notify by customerId
+      for (const s of io.sockets.sockets.values()) {
+        if (s.customerId === customerId) {
+          s.emit('call-ended');
+        }
+      }
+    }
+    sendQueueToAgents();
+  });
+
+  // Relay message from customer to agent
+  socket.on('customer-message', ({ customerId, message }) => {
+    // Find the agent handling this customer
+    for (const [agentId, custId] of activeCalls.entries()) {
+      if (custId === customerId) {
+        io.to(agentId).emit('agent-message', { customerId, message });
+      }
+    }
+  });
+
+  // Relay message from agent to customer
+  socket.on('agent-message', ({ customerId, message }) => {
+    // Find the customer socket
+    for (const s of io.sockets.sockets.values()) {
+      if (s.customerId === customerId) {
+        s.emit('customer-message', { message });
+      }
+    }
   });
 
   // DISCONNECT

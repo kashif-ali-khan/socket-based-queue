@@ -17,16 +17,46 @@ export default function Agent() {
   const [queue, setQueue] = useState([]);
   const [selectedLanguages, setSelectedLanguages] = useState([]);
   const [joined, setJoined] = useState(false);
+  const [connectedCustomerId, setConnectedCustomerId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
 
   useEffect(() => {
     if (joined) {
       socket.emit('agent-dashboard', { languages: selectedLanguages });
     }
-    socket.on('dashboard-update', (data) => {
-      setQueue(data);
+
+    const handleDashboardUpdate = (data) => setQueue(data);
+    const handleCallConnected = ({ customerId }) => {
+      setConnectedCustomerId(customerId);
+      setMessages([]); // Clear chat on new call
+    };
+    const handleCallEnded = () => {
+      setConnectedCustomerId(null);
+    };
+
+    socket.on('dashboard-update', handleDashboardUpdate);
+    socket.on('call-connected', handleCallConnected);
+    socket.on('call-ended', handleCallEnded);
+    socket.on('agent-message', ({ customerId, message }) => {
+      setMessages((prev) => [...prev, { from: 'customer', text: message }]);
     });
-   // return () => socket.disconnect();
-  }, [selectedLanguages, joined, selectedLanguages.length]);
+
+    // Cleanup: remove listeners only, not disconnect
+    return () => {
+      socket.off('dashboard-update', handleDashboardUpdate);
+      socket.off('call-connected', handleCallConnected);
+      socket.off('call-ended', handleCallEnded);
+      socket.off('agent-message');
+    };
+  }, [selectedLanguages, joined]);
+
+  // Disconnect socket only when component unmounts
+  useEffect(() => {
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
 
   const handleLanguageChange = (e) => {
     const options = Array.from(e.target.options);
@@ -37,6 +67,22 @@ export default function Agent() {
     if (selectedLanguages.length > 0) {
       setJoined(true);
       socket.emit('agent-dashboard', { languages: selectedLanguages });
+    }
+  };
+
+  const handleConnect = (customerId) => {
+    socket.emit('connect-customer', { customerId });
+  };
+
+  const handleEndCall = () => {
+    socket.emit('end-call', { customerId: connectedCustomerId });
+  };
+
+  const sendMessage = () => {
+    if (chatInput.trim() && connectedCustomerId) {
+      socket.emit('agent-message', { customerId: connectedCustomerId, message: chatInput });
+      setMessages((prev) => [...prev, { from: 'me', text: chatInput }]);
+      setChatInput('');
     }
   };
 
@@ -77,20 +123,80 @@ export default function Agent() {
                 <th className="px-4 py-2 border-b text-left">Customer ID</th>
                 <th className="px-4 py-2 border-b text-left">Language</th>
                 <th className="px-4 py-2 border-b text-left">Est. Wait</th>
+                <th className="px-4 py-2 border-b text-left">Action</th>
               </tr>
             </thead>
             <tbody>
-              {queue.map(({ name, customerId, language, position, estWait }) => (
+              {queue.map(({ name, customerId, language, position, estWait }, idx) => (
                 <tr key={customerId} className="hover:bg-blue-50">
                   <td className="px-4 py-2 border-b">{position}</td>
                   <td className="px-4 py-2 border-b">{name}</td>
                   <td className="px-4 py-2 border-b">{customerId}</td>
                   <td className="px-4 py-2 border-b">{language}</td>
                   <td className="px-4 py-2 border-b">{Math.floor(estWait / 60)}m {estWait % 60}s</td>
+                  <td className="px-4 py-2 border-b">
+                    {connectedCustomerId === customerId ? (
+                      <button
+                        className="bg-red-600 text-white rounded px-4 py-2 font-semibold hover:bg-red-700"
+                        onClick={handleEndCall}
+                      >
+                        End Call
+                      </button>
+                    ) : idx === 0 && !connectedCustomerId ? (
+                      <button
+                        className="bg-green-600 text-white rounded px-4 py-2 font-semibold hover:bg-green-700"
+                        onClick={() => handleConnect(customerId)}
+                      >
+                        Connect
+                      </button>
+                    ) : null}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {connectedCustomerId && (
+        <div className="mt-8">
+          <h3 className="text-lg font-semibold mb-2">Chat with Customer</h3>
+          <button
+            className="bg-red-600 text-white rounded px-4 py-2 font-semibold hover:bg-red-700 mb-4"
+            onClick={handleEndCall}
+          >
+            End Call
+          </button>
+          <div className="h-48 overflow-y-auto border border-gray-200 rounded p-2 bg-gray-50 mb-2">
+            {messages.length === 0 ? (
+              <div className="text-gray-400 text-center">No messages yet</div>
+            ) : (
+              messages.map((msg, idx) => (
+                <div key={idx} className={msg.from === 'me' ? 'text-right' : 'text-left'}>
+                  <span className={msg.from === 'me' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}
+                        style={{ display: 'inline-block', borderRadius: 8, padding: '4px 10px', margin: '2px 0' }}>
+                    {msg.from === 'me' ? 'You: ' : 'Customer: '}{msg.text}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="flex-1 border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              placeholder="Type your message..."
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') sendMessage(); }}
+              disabled={!connectedCustomerId}
+            />
+            <button
+              className="bg-blue-600 text-white rounded px-4 py-2 font-semibold hover:bg-blue-700 disabled:opacity-50"
+              onClick={sendMessage}
+              disabled={!chatInput.trim() || !connectedCustomerId}
+            >
+              Send
+            </button>
+          </div>
         </div>
       )}
     </div>
